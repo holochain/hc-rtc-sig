@@ -55,7 +55,6 @@ mod tests {
     async fn sanity() {
         let (cert, key) = tls::gen_tls_cert_pair().unwrap();
         let tls = tls::TlsConfigBuilder::default()
-            .with_alpn(b"hc-rtc-sig/1")
             .with_cert(cert, key)
             .build()
             .unwrap();
