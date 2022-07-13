@@ -275,6 +275,14 @@ pub struct TlsConfig {
     digest: Arc<TlsId>,
 }
 
+impl std::fmt::Debug for TlsConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TlsConfig")
+            .field("cert_digest", &self.digest)
+            .finish()
+    }
+}
+
 impl TlsConfig {
     /// Builder for generating TlsConfig instances
     pub fn builder() -> TlsConfigBuilder {

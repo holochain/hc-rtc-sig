@@ -14,9 +14,11 @@ type Socket = tokio_tungstenite::WebSocketStream<
 >;
 
 /// Builder for constructing a Srv instance.
+#[derive(Debug)]
 pub struct SrvBuilder {
     tls: Option<tls::TlsConfig>,
-    bind: Vec<(std::net::SocketAddr, Option<String>, Option<u16>)>,
+    bind: Vec<(std::net::SocketAddr, String, u16)>,
+    ice_servers: String,
 }
 
 impl Default for SrvBuilder {
@@ -24,6 +26,7 @@ impl Default for SrvBuilder {
         Self {
             tls: None,
             bind: Vec::new(),
+            ice_servers: "[]".to_string(),
         }
     }
 }
@@ -44,8 +47,8 @@ impl SrvBuilder {
     pub fn add_bind(
         &mut self,
         iface: std::net::SocketAddr,
-        host: Option<String>,
-        port: Option<u16>,
+        host: String,
+        port: u16,
     ) {
         self.bind.push((iface, host, port));
     }
@@ -54,10 +57,27 @@ impl SrvBuilder {
     pub fn with_bind(
         mut self,
         iface: std::net::SocketAddr,
-        host: Option<String>,
-        port: Option<u16>,
+        host: String,
+        port: u16,
     ) -> Self {
         self.add_bind(iface, host, port);
+        self
+    }
+
+    /// Set the ice servers to publish.
+    pub fn set_ice_servers(
+        &mut self,
+        ice_servers: String,
+    ) {
+        self.ice_servers = ice_servers;
+    }
+
+    /// Appli ice servers to publish.
+    pub fn with_ice_servers(
+        mut self,
+        ice_servers: String,
+    ) -> Self {
+        self.set_ice_servers(ice_servers);
         self
     }
 
@@ -98,7 +118,10 @@ impl Srv {
     // -- private -- //
 
     async fn priv_build(builder: SrvBuilder) -> Result<Self> {
-        let SrvBuilder { tls, bind } = builder;
+        tracing::info!(config=?builder, "start server");
+
+        let SrvBuilder { tls, bind, ice_servers } = builder;
+        let ice: Arc<[u8]> = ice_servers.into_bytes().into();
 
         let tls = match tls {
             Some(tls) => tls,
@@ -112,27 +135,20 @@ impl Srv {
 
         let ip_limit = IpLimit::new();
 
-        for (iface, mut host, mut port) in bind {
+        for (iface, host, mut port) in bind {
             let listener = tokio::net::TcpListener::bind(iface).await?;
             let addr = listener.local_addr()?;
-            if host.is_none() {
-                let ip = addr.ip();
-                if ip.is_ipv6() {
-                    host = Some(format!("[{}]", addr.ip()));
-                } else {
-                    host = Some(addr.ip().to_string());
-                }
+            if port == 0 {
+                port = addr.port();
             }
-            if port.is_none() {
-                port = Some(addr.port());
-            }
-            bound.push(format!("{}:{}", host.unwrap(), port.unwrap()));
+            bound.push(format!("{}:{}", host, port));
 
             srv_term.spawn_err(
                 listener_task(
                     tls.clone(),
                     srv_term.clone(),
                     listener,
+                    ice.clone(),
                     ip_limit.clone(),
                     con_map.clone(),
                 ),
@@ -151,8 +167,6 @@ impl Srv {
 
         let addr = format!("hc-rtc-sig:{}/{}", id, bound.join("/"));
         let addr = url::Url::parse(&addr).map_err(other_err)?;
-
-        println!("addr: {}", addr);
 
         Ok(Self { addr, srv_term })
     }
@@ -191,6 +205,7 @@ async fn listener_task(
     tls: tls::TlsConfig,
     srv_term: util::Term,
     listener: tokio::net::TcpListener,
+    ice: Arc<[u8]>,
     ip_limit: IpLimit,
     con_map: ConMap,
 ) -> Result<()> {
@@ -234,6 +249,7 @@ async fn listener_task(
                 srv_term.clone(),
                 con_term.clone(),
                 id,
+                ice.clone(),
                 socket,
                 addr.ip(),
                 ip_limit.clone(),
@@ -251,32 +267,13 @@ async fn listener_task(
 
 const HELLO: &[u8] = b"hrsH";
 const FORWARD: &[u8] = b"hrsF";
-const ICE: &[u8] = br#"[
-    {
-      "urls": ["stun:openrelay.metered.ca:80"]
-    },
-    {
-      "urls": ["turn:openrelay.metered.ca:80"],
-      "username": "openrelayproject",
-      "credential": "openrelayproject"
-    },
-    {
-      "urls": ["turn:openrelay.metered.ca:443"],
-      "username": "openrelayproject",
-      "credential": "openrelayproject"
-    },
-    {
-      "urls": ["turn:openrelay.metered.ca:443?transport=tcp"],
-      "username": "openrelayproject",
-      "credential": "openrelayproject"
-    }
-]"#;
 
 async fn con_task(
     tls: tls::TlsConfig,
     srv_term: util::Term,
     con_term: util::Term,
     id: Box<[u8]>,
+    ice: Arc<[u8]>,
     socket: tokio::net::TcpStream,
     ip: std::net::IpAddr,
     ip_limit: IpLimit,
@@ -312,10 +309,10 @@ async fn con_task(
         },
     );
 
-    let mut hello = Vec::with_capacity(HELLO.len() + id.len() + ICE.len());
+    let mut hello = Vec::with_capacity(HELLO.len() + id.len() + ice.len());
     hello.extend_from_slice(HELLO);
     hello.extend_from_slice(&id);
-    hello.extend_from_slice(ICE);
+    hello.extend_from_slice(&ice);
 
     con.send(hello).await?;
 
