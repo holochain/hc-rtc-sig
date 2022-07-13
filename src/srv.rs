@@ -65,18 +65,12 @@ impl SrvBuilder {
     }
 
     /// Set the ice servers to publish.
-    pub fn set_ice_servers(
-        &mut self,
-        ice_servers: String,
-    ) {
+    pub fn set_ice_servers(&mut self, ice_servers: String) {
         self.ice_servers = ice_servers;
     }
 
     /// Appli ice servers to publish.
-    pub fn with_ice_servers(
-        mut self,
-        ice_servers: String,
-    ) -> Self {
+    pub fn with_ice_servers(mut self, ice_servers: String) -> Self {
         self.set_ice_servers(ice_servers);
         self
     }
@@ -120,7 +114,11 @@ impl Srv {
     async fn priv_build(builder: SrvBuilder) -> Result<Self> {
         tracing::info!(config=?builder, "start server");
 
-        let SrvBuilder { tls, bind, ice_servers } = builder;
+        let SrvBuilder {
+            tls,
+            bind,
+            ice_servers,
+        } = builder;
         let ice: Arc<[u8]> = ice_servers.into_bytes().into();
 
         let tls = match tls {
@@ -154,7 +152,6 @@ impl Srv {
                 ),
                 |err| {
                     eprintln!("ListenerError: {:?}", err);
-                    std::process::abort();
                 },
             );
         }
@@ -167,6 +164,8 @@ impl Srv {
 
         let addr = format!("hc-rtc-sig:{}/{}", id, bound.join("/"));
         let addr = url::Url::parse(&addr).map_err(other_err)?;
+
+        tracing::info!(%addr, "running");
 
         Ok(Self { addr, srv_term })
     }

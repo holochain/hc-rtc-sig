@@ -50,9 +50,24 @@ pub mod util;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lair_keystore_api::prelude::*;
+    use std::sync::Arc;
+
+    fn init_tracing() {
+        let subscriber = tracing_subscriber::FmtSubscriber::builder()
+            .with_env_filter(
+                tracing_subscriber::filter::EnvFilter::from_default_env(),
+            )
+            .with_file(true)
+            .with_line_number(true)
+            .finish();
+        let _ = tracing::subscriber::set_global_default(subscriber);
+    }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn sanity() {
+        init_tracing();
+
         let (cert, key) = tls::gen_tls_cert_pair().unwrap();
         let tls = tls::TlsConfigBuilder::default()
             .with_cert(cert, key)
@@ -60,8 +75,41 @@ mod tests {
             .unwrap();
         let _srv = srv::Srv::builder()
             .with_tls(tls)
-            .with_bind("127.0.0.1:0".parse().unwrap(), None, None)
-            .with_bind("[::1]:0".parse().unwrap(), None, None)
+            .with_bind("127.0.0.1:0".parse().unwrap(), "127.0.0.1".into(), 0)
+            .with_bind("[::1]:0".parse().unwrap(), "[::1]".into(), 0)
+            .build()
+            .await
+            .unwrap();
+
+        let passphrase = sodoken::BufRead::new_no_lock(b"test-passphrase");
+        let keystore_config = PwHashLimits::Minimum
+            .with_exec(|| LairServerConfigInner::new("/", passphrase.clone()))
+            .await
+            .unwrap();
+
+        let keystore = PwHashLimits::Minimum
+            .with_exec(|| {
+                lair_keystore_api::in_proc_keystore::InProcKeystore::new(
+                    Arc::new(keystore_config),
+                    lair_keystore_api::mem_store::create_mem_store_factory(),
+                    passphrase,
+                )
+            })
+            .await
+            .unwrap();
+
+        let lair_client = keystore.new_client().await.unwrap();
+        let tag: Arc<str> =
+            rand_utf8::rand_utf8(&mut rand::thread_rng(), 32).into();
+
+        lair_client
+            .new_seed(tag.clone(), None, false)
+            .await
+            .unwrap();
+
+        let _cli = cli::Cli::builder()
+            .with_lair_client(lair_client)
+            .with_lair_tag(tag)
             .build()
             .await
             .unwrap();

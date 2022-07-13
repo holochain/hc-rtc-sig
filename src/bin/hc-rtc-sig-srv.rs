@@ -276,8 +276,8 @@ async fn read_config(opt: Opt) -> Result<hc_rtc_sig::srv::SrvBuilder> {
     };
 
     let mut srv_builder = hc_rtc_sig::srv::SrvBuilder::default()
-       .with_tls(tls)
-       .with_ice_servers(serde_json::to_string(&ice_servers).unwrap());
+        .with_tls(tls)
+        .with_ice_servers(serde_json::to_string(&ice_servers).unwrap());
 
     for binding in binding_list {
         if !binding.enabled {
