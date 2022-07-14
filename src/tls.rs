@@ -6,57 +6,6 @@ use sha2::Digest;
 use std::sync::Arc;
 use tokio_rustls::*;
 
-/// Tls node/peer identifier. Sha256 digest of DER encoded tls certificate.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct TlsId(pub [u8; 32]);
-
-impl std::fmt::Debug for TlsId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut a = self.to_b64();
-        a.replace_range(8..a.len() - 8, "..");
-        f.write_str(&a)
-    }
-}
-
-impl std::fmt::Display for TlsId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.to_b64())
-    }
-}
-
-impl std::ops::Deref for TlsId {
-    type Target = [u8];
-
-    fn deref(&self) -> &Self::Target {
-        &self.0[..]
-    }
-}
-
-impl AsRef<[u8]> for TlsId {
-    fn as_ref(&self) -> &[u8] {
-        &self.0[..]
-    }
-}
-
-impl TlsId {
-    /// Decode a base64 encoded TlsId.
-    pub fn from_b64(s: &str) -> Result<Arc<Self>> {
-        let v = base64::decode_config(s, base64::URL_SAFE_NO_PAD)
-            .map_err(other_err)?;
-        if v.len() != 32 {
-            return Err(other_err("InvalidTlsCertDigest"));
-        }
-        let mut out = [0; 32];
-        out.copy_from_slice(&v);
-        Ok(Arc::new(Self(out)))
-    }
-
-    /// Encode a TlsId as base64.
-    pub fn to_b64(&self) -> String {
-        base64::encode_config(self, base64::URL_SAFE_NO_PAD)
-    }
-}
-
 /// The well-known CA keypair in plaintext pem format.
 /// Some TLS clients require CA roots to validate client-side certificates.
 /// By publishing the private keys here, we are essentially allowing
@@ -214,7 +163,7 @@ impl TlsConfigBuilder {
 
         let mut digest = sha2::Sha256::new();
         digest.update(&cert.0);
-        let digest = Arc::new(TlsId(digest.finalize().into()));
+        let digest = Arc::new(Id(digest.finalize().into()));
 
         let cert = rustls::Certificate(cert.0.into_vec());
         let pk = rustls::PrivateKey(pk.0.into_vec());
@@ -229,7 +178,7 @@ impl TlsConfigBuilder {
             .with_protocol_versions(self.protocol_versions.as_slice())
             .map_err(other_err)?
             .with_client_cert_verifier(rustls::server::NoClientAuth::new())
-            .with_single_cert(vec![cert.clone()], pk.clone())
+            .with_single_cert(vec![cert], pk)
             .map_err(other_err)?;
 
         if self.key_log {
@@ -272,7 +221,7 @@ impl TlsConfigBuilder {
 pub struct TlsConfig {
     pub(crate) srv: Arc<rustls::ServerConfig>,
     pub(crate) cli: Arc<rustls::ClientConfig>,
-    digest: Arc<TlsId>,
+    digest: Arc<Id>,
 }
 
 impl std::fmt::Debug for TlsConfig {
@@ -290,7 +239,7 @@ impl TlsConfig {
     }
 
     /// Get the sha256 hash of the TLS certificate representing this server
-    pub fn cert_digest(&self) -> &Arc<TlsId> {
+    pub fn cert_digest(&self) -> &Arc<Id> {
         &self.digest
     }
 }

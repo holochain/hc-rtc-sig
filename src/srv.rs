@@ -264,9 +264,7 @@ async fn listener_task(
     }
 }
 
-const HELLO: &[u8] = b"hrsH";
-const FORWARD: &[u8] = b"hrsF";
-
+#[allow(clippy::too_many_arguments)]
 async fn con_task(
     tls: tls::TlsConfig,
     srv_term: util::Term,
@@ -296,24 +294,23 @@ async fn con_task(
         sink,
     };
 
-    let con_term_err = con_term.clone();
-    util::Term::spawn_err2(
-        &srv_term,
-        &con_term,
-        con_recv_task(stream, ip, ip_limit, con_map),
-        move |err| {
-            // TODO: tracing
-            eprintln!("ConRecvError: {:?}", err);
-            con_term_err.term();
-        },
-    );
-
     let mut hello = Vec::with_capacity(HELLO.len() + id.len() + ice.len());
     hello.extend_from_slice(HELLO);
     hello.extend_from_slice(&id);
     hello.extend_from_slice(&ice);
 
     con.send(hello).await?;
+
+    let con_term_err = con_term.clone();
+    util::Term::spawn_err2(
+        &srv_term,
+        &con_term,
+        con_recv_task(stream, id, ip, ip_limit, con_map),
+        move |err| {
+            tracing::debug!("ConRecvError: {:?}", err);
+            con_term_err.term();
+        },
+    );
 
     while let Some(data) = con_hnd_recv.recv().await {
         con.send(data).await?;
@@ -325,6 +322,7 @@ async fn con_task(
 
 async fn con_recv_task(
     mut stream: futures::stream::SplitStream<Socket>,
+    id: Box<[u8]>,
     ip: IpAddr,
     ip_limit: IpLimit,
     con_map: ConMap,
@@ -333,7 +331,7 @@ async fn con_recv_task(
         if !ip_limit.check(ip) {
             return Err(other_err("IpLimitReached"));
         }
-        let bin_data: Vec<u8> = match msg.map_err(other_err)? {
+        let mut bin_data: Vec<u8> = match msg.map_err(other_err)? {
             Message::Text(data) => data.into_bytes(),
             Message::Binary(data) => data,
             Message::Ping(data) => data,
@@ -352,11 +350,17 @@ async fn con_recv_task(
             return Err(other_err("InvalidMsg"));
         }
 
-        let id = &bin_data[4..36];
-        let data = bin_data[36..].to_vec();
-        con_map.send(id, data);
+        let dest_id = bin_data[4..36].to_vec();
+
+        // now replace the id with the source id
+        // so the recipient knows who it came from
+        bin_data[4..36].copy_from_slice(&id);
+
+        con_map.send(&dest_id, bin_data);
     }
-    Ok(())
+
+    // always error on end so our term is called
+    Err(other_err("ConClose"))
 }
 
 // 100 msgs in 5 seconds is 20 messages per second

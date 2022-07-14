@@ -1,3 +1,8 @@
+#![deny(warnings)]
+#![deny(unsafe_code)]
+// these are copied out of std-lib nightly... rather leave them as-is
+#![allow(clippy::nonminimal_bool)]
+
 use clap::Parser;
 use hc_rtc_sig::tls;
 
@@ -44,7 +49,7 @@ macro_rules! jsdoc {
         impl Default for $n {
             fn default() -> Self {
                 Self {$(
-                    $dn: $dn,
+                    $dn,
                     $rn: $rd,
                 )*}
             }
