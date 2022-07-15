@@ -127,6 +127,11 @@ jsdoc! { Config {
         serde_json::Value, (serde_json::from_str(ICE_SERVERS).unwrap()),
         hc4, "#iceServers", "webrtc configuration to broadcast",
     ],
+    [
+        (), demo,
+        bool, (false),
+        hc5, "#demo", "enable demo broadcasting as a stand-in for bootstrapping",
+    ],
 }}
 
 #[tokio::main(flavor = "multi_thread")]
@@ -244,6 +249,7 @@ async fn read_config(opt: Opt) -> Result<hc_rtc_sig::srv::SrvBuilder> {
         tls_cert_der_b64,
         tls_cert_pk_der_b64,
         ice_servers,
+        demo,
         ..
     } = conf;
 
@@ -282,7 +288,8 @@ async fn read_config(opt: Opt) -> Result<hc_rtc_sig::srv::SrvBuilder> {
 
     let mut srv_builder = hc_rtc_sig::srv::SrvBuilder::default()
         .with_tls(tls)
-        .with_ice_servers(serde_json::to_string(&ice_servers).unwrap());
+        .with_ice_servers(serde_json::to_string(&ice_servers).unwrap())
+        .with_allow_demo(demo);
 
     for binding in binding_list {
         if !binding.enabled {

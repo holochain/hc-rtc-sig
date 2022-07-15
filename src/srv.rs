@@ -19,6 +19,7 @@ pub struct SrvBuilder {
     tls: Option<tls::TlsConfig>,
     bind: Vec<(std::net::SocketAddr, String, u16)>,
     ice_servers: String,
+    allow_demo: bool,
 }
 
 impl Default for SrvBuilder {
@@ -27,6 +28,7 @@ impl Default for SrvBuilder {
             tls: None,
             bind: Vec::new(),
             ice_servers: "[]".to_string(),
+            allow_demo: false,
         }
     }
 }
@@ -69,9 +71,20 @@ impl SrvBuilder {
         self.ice_servers = ice_servers;
     }
 
-    /// Appli ice servers to publish.
+    /// Apply ice servers to publish.
     pub fn with_ice_servers(mut self, ice_servers: String) -> Self {
         self.set_ice_servers(ice_servers);
+        self
+    }
+
+    /// Set the allow_demo flag.
+    pub fn set_allow_demo(&mut self, allow_demo: bool) {
+        self.allow_demo = allow_demo;
+    }
+
+    /// Apply the allow_demo flag.
+    pub fn with_allow_demo(mut self, allow_demo: bool) -> Self {
+        self.set_allow_demo(allow_demo);
         self
     }
 
@@ -118,6 +131,7 @@ impl Srv {
             tls,
             bind,
             ice_servers,
+            allow_demo,
         } = builder;
         let ice: Arc<[u8]> = ice_servers.into_bytes().into();
 
@@ -149,6 +163,7 @@ impl Srv {
                     ice.clone(),
                     ip_limit.clone(),
                     con_map.clone(),
+                    allow_demo,
                 ),
                 |err| {
                     eprintln!("ListenerError: {:?}", err);
@@ -207,6 +222,7 @@ async fn listener_task(
     ice: Arc<[u8]>,
     ip_limit: IpLimit,
     con_map: ConMap,
+    allow_demo: bool,
 ) -> Result<()> {
     loop {
         let (socket, addr) = match listener.accept().await {
@@ -254,6 +270,7 @@ async fn listener_task(
                 ip_limit.clone(),
                 con_map.clone(),
                 con_hnd_recv,
+                allow_demo,
             ),
             move |err| {
                 // TODO: tracing
@@ -276,6 +293,7 @@ async fn con_task(
     ip_limit: IpLimit,
     con_map: ConMap,
     mut con_hnd_recv: tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>,
+    allow_demo: bool,
 ) -> Result<()> {
     let socket = tcp_configure(socket)?;
     let socket: tokio_rustls::TlsStream<tokio::net::TcpStream> =
@@ -305,7 +323,7 @@ async fn con_task(
     util::Term::spawn_err2(
         &srv_term,
         &con_term,
-        con_recv_task(stream, id, ip, ip_limit, con_map),
+        con_recv_task(stream, id, ip, ip_limit, con_map, allow_demo),
         move |err| {
             tracing::debug!("ConRecvError: {:?}", err);
             con_term_err.term();
@@ -326,6 +344,7 @@ async fn con_recv_task(
     ip: IpAddr,
     ip_limit: IpLimit,
     con_map: ConMap,
+    allow_demo: bool,
 ) -> Result<()> {
     while let Some(msg) = stream.next().await {
         if !ip_limit.check(ip) {
@@ -346,17 +365,32 @@ async fn con_recv_task(
             return Err(other_err("InvalidMsg"));
         }
 
-        if &bin_data[0..4] != FORWARD {
-            return Err(other_err("InvalidMsg"));
+        match &bin_data[0..4] {
+            DEMO => {
+                if !allow_demo {
+                    return Err(other_err("InvalidMsg"));
+                }
+
+                let mut out = Vec::with_capacity(DEMO.len() + 32 + 32);
+                out.extend_from_slice(DEMO);
+                out.extend_from_slice(&id);
+                out.extend_from_slice(&bin_data[4..36]);
+
+                con_map.broadcast(out);
+            }
+            FORWARD => {
+                let dest_id = bin_data[4..36].to_vec();
+
+                // now replace the id with the source id
+                // so the recipient knows who it came from
+                bin_data[4..36].copy_from_slice(&id);
+
+                con_map.send(&dest_id, bin_data);
+            }
+            _ => {
+                return Err(other_err("InvalidMsg"));
+            }
         }
-
-        let dest_id = bin_data[4..36].to_vec();
-
-        // now replace the id with the source id
-        // so the recipient knows who it came from
-        bin_data[4..36].copy_from_slice(&id);
-
-        con_map.send(&dest_id, bin_data);
     }
 
     // always error on end so our term is called
@@ -418,6 +452,19 @@ impl ConMap {
         }
         if remove {
             map.remove(id);
+        }
+    }
+
+    pub fn broadcast(&self, data: Vec<u8>) {
+        let mut map = self.0.lock();
+        let mut remove = Vec::new();
+        for (id, h) in map.iter() {
+            if h.send(data.clone()).is_err() {
+                remove.push(id.clone());
+            }
+        }
+        for id in remove {
+            map.remove(&id);
         }
     }
 }

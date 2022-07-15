@@ -43,6 +43,14 @@ pub enum SigMessage {
         /// The webrtc "answer".
         ice: serde_json::Value,
     },
+
+    /// An incoming demo broadcast.
+    Demo {
+        /// Remote signal id.
+        rem_id: Arc<Id>,
+        /// Remote x25519 public key.
+        rem_pk: Arc<Id>,
+    },
 }
 
 type RecvCb = Box<dyn FnMut(SigMessage) + 'static + Send>;
@@ -218,6 +226,19 @@ impl Cli {
     {
         let ice = serde_json::to_string(ice)?;
         self.send(rem_id, rem_pk, ICE, ice.as_bytes()).await
+    }
+
+    /// Send a demo broadcast message to the server.
+    /// (If server doesn't allow demo mode, this could get you banned).
+    pub async fn demo(&mut self) -> Result<()> {
+        let mut out = Vec::with_capacity(DEMO.len() + 32);
+        out.extend_from_slice(DEMO);
+        out.extend_from_slice(&*self.loc_pk);
+
+        self.sink
+            .send(Message::Binary(out))
+            .await
+            .map_err(other_err)
     }
 
     // -- private -- //
@@ -457,6 +478,13 @@ async fn con_recv_task(
             }
             Message::Frame(_) => return Err(other_err("RawFrame")),
         };
+
+        if bin_data.len() == 4 + 32 + 32 && &bin_data[0..4] == DEMO {
+            let rem_id = Id::from_slice(&bin_data[4..36])?;
+            let rem_pk = Id::from_slice(&bin_data[36..68])?;
+            recv_cb(SigMessage::Demo { rem_id, rem_pk });
+            continue;
+        }
 
         if bin_data.len()
             < FORWARD.len()

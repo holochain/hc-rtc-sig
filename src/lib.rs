@@ -90,6 +90,7 @@ impl Id {
 
 const HELLO: &[u8] = b"hrsH";
 const FORWARD: &[u8] = b"hrsF";
+const DEMO: &[u8] = b"hrsD";
 
 /// Tx3 helper until `std::io::Error::other()` is stablized
 pub fn other_err<E: Into<Box<dyn std::error::Error + Send + Sync>>>(
@@ -258,6 +259,7 @@ mod tests {
             .with_bind("127.0.0.1:0".parse().unwrap(), "127.0.0.1".into(), 0)
             .with_bind("[::1]:0".parse().unwrap(), "[::1]".into(), 0)
             .with_ice_servers(ICE_SERVERS.to_string())
+            .with_allow_demo(true)
             .build()
             .await
             .unwrap();
@@ -334,5 +336,18 @@ mod tests {
         let msg = in_recv.recv().await;
         tracing::info!(?msg);
         assert!(matches!(msg, Some(In::Cli2(cli::SigMessage::ICE { .. }))));
+
+        cli1.cli.demo().await.unwrap();
+
+        for _ in 0..2 {
+            let msg = in_recv.recv().await;
+            tracing::info!(?msg);
+            let inner = match msg {
+                Some(In::Cli1(m)) => m,
+                Some(In::Cli2(m)) => m,
+                _ => panic!("unexpected eos"),
+            };
+            assert!(matches!(inner, cli::SigMessage::Demo { .. }));
+        }
     }
 }
