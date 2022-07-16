@@ -166,7 +166,7 @@ impl Srv {
                     allow_demo,
                 ),
                 |err| {
-                    eprintln!("ListenerError: {:?}", err);
+                    tracing::debug!(?err, "ListenerClosed");
                 },
             );
         }
@@ -228,11 +228,14 @@ async fn listener_task(
         let (socket, addr) = match listener.accept().await {
             Ok(r) => r,
             Err(err) => {
-                // TODO: tracing
-                eprintln!("AcceptError: {:?}", err);
+                tracing::debug!("AcceptError: {:?}", err);
                 continue;
             }
         };
+
+        if !ip_limit.check(addr.ip()) {
+            return Err(other_err("IpLimitReached"));
+        }
 
         let id: sodoken::BufWriteSized<32> =
             sodoken::BufWriteSized::new_no_lock();
@@ -273,8 +276,7 @@ async fn listener_task(
                 allow_demo,
             ),
             move |err| {
-                // TODO: tracing
-                eprintln!("AcceptError: {:?}", err);
+                tracing::debug!("ConClosed: {:?}", err);
                 con_term_err.term();
             },
         );
