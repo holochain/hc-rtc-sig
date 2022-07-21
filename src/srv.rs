@@ -234,6 +234,7 @@ async fn listener_task(
         };
 
         if !ip_limit.check(addr.ip()) {
+            tracing::debug!(ip = ?addr.ip(), "IpLimitReached");
             return Err(other_err("IpLimitReached"));
         }
 
@@ -350,6 +351,7 @@ async fn con_recv_task(
 ) -> Result<()> {
     while let Some(msg) = stream.next().await {
         if !ip_limit.check(ip) {
+            tracing::debug!(?ip, "IpLimitReached");
             return Err(other_err("IpLimitReached"));
         }
         let mut bin_data: Vec<u8> = match msg.map_err(other_err)? {
